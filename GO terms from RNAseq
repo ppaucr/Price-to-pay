@@ -1,0 +1,163 @@
+# Requires the following packages (need to be installed first)
+library(clusterProfiler)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(grid)
+library(cowplot)
+library(org.Mm.eg.db)
+library(ggpubr)
+
+#Set Working directory and load data
+setwd("Set your working directory")
+up_data <- read.csv("Directory of you up-regulated data in CVS format")
+down_data <- read.csv("Directory of you up-regulated data in CVS format")
+
+
+# Function to remove version numbers from Ensembl IDs. 
+#Only if the Ensembl IDs look like: ENSMUSG00000026043.19
+remove_version <- function(ids) {
+  gsub("\\.\\d+$", "", ids)
+}
+
+#Function to put the first letter in uppercase 
+capFirst <- function(s) {
+  paste(toupper(substring(s, 1, 1)), substring(s, 2), sep = "")
+}
+
+# Load your data and remove version numbers. 
+# ENSMUSG00000026043.19 --> ENSMUSG00000026043
+up_data_clean <- up_data
+up_data_clean$Ensembl <- remove_version(up_data$Ensembl)
+
+down_data_clean <- down_data
+down_data_clean$Ensembl <- remove_version(down_data$Ensembl)
+
+# Load all the mouse genes as background
+all_mouse_genes <- keys(org.Mm.eg.db, keytype = "ENSEMBL")
+
+#Check point to see if the Ensembl IDs have been modified correctly and are prepared for the enrichment
+print(head(up_data_clean$Ensembl))
+print(head(down_data_clean$Ensembl))
+
+#Function to perform the enrichment
+perform_GO_enrichment <- function(genes, title) {
+  print(paste("Performing enrichment for", title))
+  enrichment <- enrichGO(gene = genes,
+                         universe = all_mouse_genes,
+                         OrgDb = org.Mm.eg.db,
+                         keyType = "ENSEMBL",
+                         ont = "BP",
+                         pAdjustMethod = "BH",
+                         pvalueCutoff = 0.05,
+                         qvalueCutoff = 0.2)
+  
+  if(is.null(enrichment) || nrow(enrichment) == 0) {
+    print("No enriched terms found")
+    return(NULL)
+  }
+  
+  ego_df <- as.data.frame(enrichment)
+  
+  # Calculate fold enrichment
+  ego_df$GeneRatio <- as.numeric(sub("/\\d+", "", ego_df$GeneRatio)) / as.numeric(sub("\\d+/", "", ego_df$GeneRatio))
+  ego_df$BgRatio <- as.numeric(sub("/\\d+", "", ego_df$BgRatio)) / as.numeric(sub("\\d+/", "", ego_df$BgRatio))
+  ego_df$FoldEnrichment <- ego_df$GeneRatio / ego_df$BgRatio
+  ego_df$negLogFDR <- -log10(ego_df$p.adjust)
+  
+  # Sort and select top terms
+  ego_df <- ego_df %>%
+    arrange(desc(FoldEnrichment)) %>%
+    head(15)
+  
+  # Modify the description column to include GO term ID
+  # Example: elastic fiber assembly (GO:0048251)
+  ego_df$Description <- paste(ego_df$Description, " (", ego_df$ID, ")", sep="")
+  
+  # Add regulation type
+  ego_df$Regulation <- title
+  
+  return(ego_df)
+}
+
+# Perform enrichment for up and down regulated genes
+up_enrichment <- perform_GO_enrichment(up_data_clean$Ensembl, "Up-regulated Genes")
+down_enrichment <- perform_GO_enrichment(down_data_clean$Ensembl, "Down-regulated Genes")
+
+#Cap the first letter of the Description 
+up_enrichment$Description <- capFirst(up_enrichment$Description)
+down_enrichment$Description <- capFirst(down_enrichment$Description)
+
+#Combine both enrichment to obtained a combined CVS file with all the data
+combine_up_and_down <- rbind(up_enrichment, down_enrichment)
+
+# Create the combined plot
+if (!is.null(up_enrichment) && nrow(down_enrichment) > 0) {
+  # Create the plot for up-regulated genes
+  up_plot <- ggplot(up_enrichment, aes(x = FoldEnrichment, y = reorder(Description, FoldEnrichment))) +
+    geom_point(aes(size = Count, color = negLogFDR)) +
+    scale_size_continuous(range = c(3, 8), name = "Gene Count",breaks = function(x) unique(round(pretty(seq(min(x), max(x)))))) +
+    scale_color_gradient(low = "red", high = "green", name = "-log10(FDR)") +
+    guides(colour = guide_colourbar(order = 1),
+           size = guide_legend(order = 2))+
+    labs(x = "Fold Enrichment", y = NULL, title = "Up-regulated Genes") +
+    theme_bw() +
+    theme(
+      axis.text.y = element_text(size = 13, color = "black"),
+      axis.text.x = element_text(size = 10, color = "black", angle = 45, hjust = 1),
+      axis.title.x = element_text(size = 15, color = "black", face = 'bold'),
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, size = 18, color = "black", face = 'bold'),
+      panel.grid.major = element_line(color = "grey90"),
+      panel.grid.minor = element_line(color = "grey95"),
+      axis.text.y.right = element_text(hjust = 0)
+    ) +
+    scale_x_continuous(expand = expansion(mult = c(0.17, 0.2)), position = "bottom") + 
+    scale_y_discrete(position = "right")
+
+  # Create the plot for down-regulated genes
+  down_plot <- ggplot(down_enrichment, aes(x = FoldEnrichment, y = reorder(Description, FoldEnrichment))) +
+    geom_point(aes(size = Count, color = negLogFDR)) +
+    scale_size_continuous(range = c(3, 8), name = "Gene Count",breaks = function(x) unique(round(pretty(seq(min(x), max(x)))))) +
+    scale_color_gradient(low = "red", high = "green", name = "-log10(FDR)") +
+    guides(colour = guide_colourbar(order = 1),
+           size = guide_legend(order = 2)) +
+    labs(x = "Fold Enrichment", y = NULL, title = "Down-regulated Genes") +
+    theme_bw() + 
+    theme(
+      axis.text.y = element_text(size = 13, color = "black"),
+      axis.text.x = element_text(size = 10, color = "black", angle = 45, hjust = 1),
+      axis.title.x = element_text(size = 15, color = "black", face = 'bold'),
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, size = 18, color = "black", face = 'bold'),
+      panel.grid.major = element_line(color = "grey90"),
+      panel.grid.minor = element_line(color = "grey95"),
+      axis.text.y.left = element_text(hjust = 1)
+    ) +
+    scale_x_continuous(expand = expansion(mult = c(0.17, 0.17)), position = "bottom") +
+    scale_y_discrete(position = "left")
+
+    #Combine the graphs
+    combined <- ggarrange(down_plot, up_plot,
+                          nrow = 1, common.legend = F)
+
+  # Add an overall title
+  title <- textGrob("GO Enrichment Analysis #Title of your graph", gp = gpar(fontface = "bold", fontsize = 22))
+
+  #Set the final document, combining the common tittle and graphs
+  final_plot_with_title <- grid.arrange(title, combined, heights = c(1, 26))
+
+  # Save the combined plot in PDF and PNG
+  ggsave("Name for your final graph in PNG format", final_plot_with_title, width = 29, height = 17, dpi = 300, bg = "white")
+  ggsave("Name for your final graph in PDF format", final_plot_with_title, width = 29, height = 17)
+
+  # Display the plot
+  print(final_plot_with_title)
+} else {
+  print("Error: No enrichment results to plot.")
+}
+
+# Save the results to a CSV file
+write.csv(combine_up_and_down, "Name for your final combined data in CVS format", row.names = FALSE)
+
+
