@@ -1,0 +1,57 @@
+# Requires the following packages (need to be installed first)
+library(ggplot2)
+library(dplyr)
+library(plotly)
+
+#Set Working directory and load data
+setwd("Set your working directory")
+
+# Load data, previously prepared
+data <- read.table("Directory of you up-regulated data in TXT format", sep = "", header = TRUE)
+
+# Create new column for the -LogFDR
+data$negLogFDR <- -log10(data$adj.P.Val)
+
+# Add a column to determine regulation status
+data <- data %>%
+  mutate(regulation = case_when(
+    adj.P.Val < 0.05 & logFC > 0.01 ~ "Up-regulated",
+    adj.P.Val < 0.05 & logFC < -0.01 ~ "Down-regulated",
+    TRUE ~ "Not Significant"
+  ))
+
+# Extract tables for up-regulated and down-regulated genes
+up_regulated_genes <- data %>%
+  filter(regulation == "Up-regulated")
+
+down_regulated_genes <- data %>%
+  filter(regulation == "Down-regulated")
+
+# Save the tables as CSV files
+write.csv(up_regulated_genes, "Name for the up data in CVS format", row.names = T)
+write.csv(down_regulated_genes, "Name for the Down data in CVS format", row.names = T)
+
+# Create the ggplot object
+volcano_plot <- ggplot(data, aes(x = logFC, y = negLogFDR, 
+                                                              text = paste("Gene:", Gene_Name,  # Here all the information to show inside the label in the graph
+                                                                           "<br>Ensembl ID:", Ensembl,
+                                                                           "<br>Biotype:", Gene_Biotype,
+                                                                           "<br>logFC:", round(logFC, 2),
+                                                                           "<br>-logFDR:", signif(negLogFDR,3),
+                                                                           "<br>Adj. P-value:", signif(adj.P.Val, 3)))) +
+  geom_point(aes(color = regulation), alpha = 0.6) +
+  scale_color_manual(values = c("Up-regulated" = "salmon", 
+                                "Down-regulated" = "lightblue", 
+                                "Not Significant" = "grey")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  labs(x = "logFC", 
+       y = "-logFDR",  
+       title = "Title of your graph",
+       color = "Regulation") +
+  theme_minimal()
+
+# Convert ggplot to plotly
+interactive_plot <- ggplotly(volcano_plot, tooltip = "text")
+
+# Save the interactive plot as an HTML file
+htmlwidgets::saveWidget(interactive_plot,"Name for the final graph data in HTML format")
